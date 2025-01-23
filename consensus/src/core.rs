@@ -216,10 +216,8 @@ impl Core {
             // Process the QC.
             self.process_qc(&qc).await;
 
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(None).await;
-            }
+            // Themis change: every node sends messages to each other to start a new round
+            self.generate_proposal(None).await;
         }
         Ok(())
     }
@@ -257,10 +255,8 @@ impl Core {
                 .broadcast(addresses, Bytes::from(message))
                 .await;
 
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
-                self.generate_proposal(Some(tc)).await;
-            }
+            // Themis change: every node sends messages to each other to start a new round
+            self.generate_proposal(None).await;
         }
         Ok(())
     }
@@ -308,6 +304,9 @@ impl Core {
 
     #[async_recursion]
     async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
+        if block.author != self.leader_elector.get_leader(block.round) {
+            return Ok(());
+        }
         debug!("Processing {:?}", block);
 
         // Let's see if we have the last three ancestors of the block, that is:
@@ -322,6 +321,9 @@ impl Core {
                 return Ok(());
             }
         };
+
+        // Themis change: simulate the time required to derive the fair ordering
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
@@ -365,18 +367,10 @@ impl Core {
     async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         let digest = block.digest();
 
-        // Ensure the block proposer is the right leader for the round.
-        ensure!(
-            block.author == self.leader_elector.get_leader(block.round),
-            ConsensusError::WrongLeader {
-                digest,
-                leader: block.author,
-                round: block.round
-            }
-        );
-
-        // Themis change: simulate a delay for running the fair ordering algorithm
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Themis change: every node sends messages to each other to start a new round
+        if block.author != self.leader_elector.get_leader(block.round) {
+            return Ok(());
+        }
 
         // Check the block is correctly formed.
         block.verify(&self.committee)?;
@@ -406,9 +400,8 @@ impl Core {
             return Ok(());
         }
         self.advance_round(tc.round).await;
-        if self.name == self.leader_elector.get_leader(self.round) {
-            self.generate_proposal(Some(tc)).await;
-        }
+        // Themis change: every node sends messages to each other to start a new round
+        self.generate_proposal(None).await;
         Ok(())
     }
 
@@ -416,9 +409,8 @@ impl Core {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
-        if self.name == self.leader_elector.get_leader(self.round) {
-            self.generate_proposal(None).await;
-        }
+        // Themis change: all nodes send messages to each other
+        self.generate_proposal(None).await;
 
         // This is the main loop: it processes incoming blocks and votes,
         // and receive timeout notifications from our Timeout Manager.
