@@ -375,6 +375,9 @@ impl Core {
             }
         );
 
+        // Themis change: simulate a delay for running the fair ordering algorithm
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
         // Check the block is correctly formed.
         block.verify(&self.committee)?;
 
