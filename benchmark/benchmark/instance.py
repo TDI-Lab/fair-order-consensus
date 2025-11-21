@@ -144,7 +144,7 @@ class InstanceManager:
                 {
                     "Name": "description",
                     "Values": [
-                        "Canonical, Ubuntu, 22.04 LTS, amd64 jammy image build on 2023-09-19"
+                        "Canonical, Ubuntu, 22.04, amd64 jammy image"
                     ],
                 }
             ]

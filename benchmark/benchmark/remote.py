@@ -1,6 +1,6 @@
 from fabric import Connection, ThreadingGroup as Group
 from fabric.exceptions import GroupException
-from paramiko import RSAKey
+from paramiko import RSAKey, Ed25519Key, ECDSAKey, DSSKey
 from paramiko.ssh_exception import PasswordRequiredException, SSHException
 from os.path import basename, splitext
 from time import sleep
@@ -39,9 +39,32 @@ class Bench:
         self.manager = InstanceManager.make()
         self.settings = self.manager.settings
         try:
-            ctx.connect_kwargs.pkey = RSAKey.from_private_key_file(
-                self.manager.settings.key_path
-            )
+            key_path = self.manager.settings.key_path
+            # Try to auto-detect key type by attempting different key formats
+            # OpenSSH format keys are typically Ed25519, so try that first
+            key = None
+            key_types = [
+                Ed25519Key,  # Try Ed25519 first (common for OpenSSH format)
+                ECDSAKey,
+                RSAKey,
+                DSSKey,
+            ]
+            
+            for key_class in key_types:
+                try:
+                    key = key_class.from_private_key_file(key_path)
+                    break
+                except (SSHException, ValueError, IOError):
+                    continue
+            
+            if key is None:
+                raise SSHException(
+                    f"Unable to load SSH key from {key_path}: "
+                    "key format not recognized. Supported formats: "
+                    "Ed25519, ECDSA, RSA, DSS"
+                )
+            
+            ctx.connect_kwargs.pkey = key
             self.connect = ctx.connect_kwargs
         except (IOError, PasswordRequiredException, SSHException) as e:
             raise BenchError("Failed to load SSH key", e)

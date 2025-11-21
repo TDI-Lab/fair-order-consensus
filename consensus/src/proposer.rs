@@ -1,5 +1,6 @@
 use crate::config::{Committee, Stake};
 use crate::consensus::{ConsensusMessage, Round};
+use crate::leader::LeaderElector;
 use crate::messages::{Block, QC, TC};
 use bytes::Bytes;
 use crypto::{Digest, PublicKey, SignatureService};
@@ -19,6 +20,7 @@ pub enum ProposerMessage {
 pub struct Proposer {
     name: PublicKey,
     committee: Committee,
+    leader_elector: LeaderElector,
     signature_service: SignatureService,
     rx_mempool: Receiver<Digest>,
     rx_message: Receiver<ProposerMessage>,
@@ -37,9 +39,11 @@ impl Proposer {
         tx_loopback: Sender<Block>,
     ) {
         tokio::spawn(async move {
+            let leader_elector = LeaderElector::new(committee.clone());
             Self {
                 name,
                 committee,
+                leader_elector,
                 signature_service,
                 rx_mempool,
                 rx_message,
@@ -59,13 +63,35 @@ impl Proposer {
     }
 
     async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>) {
+        // Determine whether we are the leader of this round.
+        let leader = self.leader_elector.get_leader(round);
+        let is_leader = leader == self.name;
+
+        // Build the payload. Leaders carry the full batch backlog (for throughput),
+        // while non-leaders only attach a tiny sample of local information to keep
+        // their messages lightweight for the fairness experiment.
+        const NON_LEADER_MAX_PAYLOAD: usize = 32;
+        let payload: Vec<_> = if is_leader {
+            self.buffer.drain().collect()
+        } else {
+            let sample: Vec<_> = self
+                .buffer
+                .iter()
+                .take(NON_LEADER_MAX_PAYLOAD)
+                .cloned()
+                .collect();
+            // Drop everything we buffered so far; non-leader data is best-effort.
+            self.buffer.clear();
+            sample
+        };
+
         // Generate a new block.
         let block = Block::new(
             qc,
             tc,
             self.name,
             round,
-            /* payload */ self.buffer.drain().collect(),
+            /* payload */ payload,
             self.signature_service.clone(),
         )
         .await;
@@ -125,9 +151,7 @@ impl Proposer {
         loop {
             tokio::select! {
                 Some(digest) = self.rx_mempool.recv() => {
-                    //if self.buffer.len() < 155 {
-                        self.buffer.insert(digest);
-                    //}
+                    self.buffer.insert(digest);
                 },
                 Some(message) = self.rx_message.recv() => match message {
                     ProposerMessage::Make(round, qc, tc) => self.make_block(round, qc, tc).await,
